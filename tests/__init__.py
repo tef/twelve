@@ -1,5 +1,5 @@
 import unittest2
-import twelve as glyph
+import twelve
 import datetime
 import collections
 
@@ -21,23 +21,23 @@ class EncodingTest(unittest2.TestCase):
             False,
             {'a':1},
             set([1,2,3]),
-            glyph.utcnow(),
+            twelve.utcnow(),
             datetime.timedelta(days=5, hours=4, minutes=3, seconds=2),
         ]
         for c in cases:
-            self.assertEqual(c, glyph.parse(glyph.dump(c)))
+            self.assertEqual(c, twelve.parse(twelve.dump(c)))
 
 class BlobEncodingTest(unittest2.TestCase):
     def testCase(self):
         s = "Hello, World"
-        a = glyph.blob(s)
-        b = glyph.parse(glyph.dump(a))
+        a = twelve.blob(s)
+        b = twelve.parse(twelve.dump(a))
 
         self.assertEqual(s, b.fh.read())
 
         s = "Hello, World"
-        a = glyph.blob(BytesIO(s))
-        b = glyph.parse(glyph.dump(a))
+        a = twelve.blob(BytesIO(s))
+        b = twelve.parse(twelve.dump(a))
 
         self.assertEqual(s, b.fh.read())
 

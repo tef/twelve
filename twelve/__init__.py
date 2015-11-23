@@ -20,7 +20,7 @@ except ImportError:
         raise NotImplementedError()
 
 
-CONTENT_TYPE='application/vnd.hyperglyph'
+CONTENT_TYPE='application/twelve.tlv'
 
 UNICODE_CHARSET="utf-8"
 
