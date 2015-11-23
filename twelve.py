@@ -48,6 +48,11 @@ EXT='X'
 BLOB = 'B'
 CHUNK = 'c'
 
+def utcnow():
+    return datetime.utcnow().replace(tzinfo=utc)
+
+
+
 def blob(content, content_type=u"application/octet-stream"):
     if isinstance(content, unicode):
         content = io.StringIO(content)
@@ -135,13 +140,10 @@ class Encoder(object):
 
 
     def _dump(self, obj, resolver, inline):
-        blobs = []
-        for o in self._dump_one(obj, resolver, inline, blobs):
-            yield o
-        for o in self._dump_blobs(blobs):
+        for o in self._dump_one(obj, resolver, inline):
             yield o
 
-    def _dump_one(self, obj, resolver, inline, blobs):
+    def _dump_one(self, obj, resolver, inline):
         if obj is True:
             yield TRUE
             yield END_ITEM
@@ -158,11 +160,11 @@ class Encoder(object):
             yield EXT
             name, attributes, content = obj.__getstate__()
             obj.__resolve__(resolver)
-            for r in self._dump_one(name, resolver, inline, blobs): 
+            for r in self._dump_one(name, resolver, inline): 
                 yield r
-            for r in self._dump_one(attributes, resolver, inline, blobs):
+            for r in self._dump_one(attributes, resolver, inline):
                 yield r
-            for r in self._dump_one(content, resolver, inline, blobs):
+            for r in self._dump_one(content, resolver, inline):
                 yield r
             yield END_EXT
         
@@ -186,7 +188,7 @@ class Encoder(object):
         elif isinstance(obj, set):
             yield SET
             for x in sorted(obj):
-                for r in self._dump_one(x, resolver, inline, blobs): yield r
+                for r in self._dump_one(x, resolver, inline): yield r
             yield END_SET
         elif hasattr(obj, 'iteritems'):
             if isinstance(obj, collections.OrderedDict):
@@ -195,22 +197,27 @@ class Encoder(object):
                 yield DICT
             for k in sorted(obj.keys()): # always sorted, so can compare serialized
                 v=obj[k]
-                for r in self._dump_one(k, resolver, inline, blobs): yield r
-                for r in self._dump_one(v, resolver, inline, blobs): yield r
+                for r in self._dump_one(k, resolver, inline): yield r
+                for r in self._dump_one(v, resolver, inline): yield r
             yield END_DICT
         elif isinstance(obj, Blob):
-            blob_id = len(blobs)
-            blobs.append(obj.fh)
             yield BLOB
-            yield str(blob_id)
-            yield LEN_SEP
-            for r in self._dump_one(obj._attributes, resolver, inline, blobs):
+            for r in self._dump_one(obj._attributes, resolver, inline):
                 yield r
+            b = obj.fh
+            while True:
+                data = b.read(8192)
+                if not data:
+                    break
+                yield LEN_SEP
+                yield str(len(data))
+                yield LEN_SEP
+                yield data
             yield END_ITEM
         elif hasattr(obj, '__iter__'):
             yield LIST
             for x in obj:
-                for r in self._dump_one(x, resolver, inline, blobs): yield r
+                for r in self._dump_one(x, resolver, inline): yield r
             yield END_LIST
         elif isinstance(obj, (int, long)):
             yield NUM
@@ -232,25 +239,7 @@ class Encoder(object):
             yield END_ITEM
 
         else:
-            for r in self._dump_one(inline(obj), resolver, inline, blobs): yield r
-
-    def _dump_blobs(self, blobs):
-        for idx, b in enumerate(blobs):
-            while True:
-                data = b.read(8192)
-                if not data:
-                    break
-                yield CHUNK
-                yield str(idx)
-                yield LEN_SEP
-                yield str(len(data))
-                yield LEN_SEP
-                yield data
-                yield END_ITEM
-            yield CHUNK
-            yield str(idx)
-            yield END_ITEM
-
+            for r in self._dump_one(inline(obj), resolver, inline): yield r
 
     def parse(self, stream, base_url=None):
         if not hasattr(stream, "read"):
@@ -258,15 +247,13 @@ class Encoder(object):
         return self.read(stream, base_url)
         
     def read(self, fh, base_url=None):
-        blobs = {}
         first = read_first(fh)
         if first == '':
             raise EOFError()
-        result = self._read_one(fh, first, blobs, base_url)
-        self._read_blobs(fh, blobs)
+        result = self._read_one(fh, first, base_url)
         return result
 
-    def _read_one(self, fh, c, blobs, base_url=None):
+    def _read_one(self, fh, c, base_url=None):
         if c == NONE:
             _read_until(fh, END_ITEM)
             return None
@@ -305,7 +292,7 @@ class Encoder(object):
             first = read_first(fh)
             out = set()
             while first != END_SET:
-                item = self._read_one(fh, first, blobs, base_url)
+                item = self._read_one(fh, first, base_url)
                 if item not in out:
                     out.add(item)
                 else:
@@ -317,7 +304,7 @@ class Encoder(object):
             first = read_first(fh)
             out = []
             while first != END_LIST:
-                out.append(self._read_one(fh, first, blobs, base_url))
+                out.append(self._read_one(fh, first, base_url))
                 first = read_first(fh)
             return out
 
@@ -328,9 +315,9 @@ class Encoder(object):
             else:
                 out = {}
             while first != END_DICT:
-                f = self._read_one(fh, first, blobs, base_url)
+                f = self._read_one(fh, first, base_url)
                 second = read_first(fh)
-                g = self._read_one(fh, second, blobs, base_url)
+                g = self._read_one(fh, second, base_url)
                 new = out.setdefault(f,g)
                 if new is not g:
                     raise StandardError('duplicate key')
@@ -338,14 +325,14 @@ class Encoder(object):
             return out
         elif c == EXT:
             first = read_first(fh)
-            name = self._read_one(fh, first, blobs, base_url)
+            name = self._read_one(fh, first, base_url)
             first = read_first(fh)
-            attr  = self._read_one(fh, first, blobs, base_url)
+            attr  = self._read_one(fh, first, base_url)
 
             attr, new_base = self.extension.__rebase__(name, attr, base_url )
 
             first = read_first(fh)
-            content = self._read_one(fh, first, blobs, new_base)
+            content = self._read_one(fh, first, new_base)
 
             first = read_first(fh)
             if first != END_EXT:
@@ -369,39 +356,41 @@ class Encoder(object):
 
             raise StandardError('decoding date err', datestring)
         elif c == BLOB:
-            blob_id, first = _read_until(fh, LEN_SEP, parse=int)
             first = read_first(fh)
-            attr  = self._read_one(fh, first, blobs, base_url)
-            blob = Blob(self.temp_file(), attr)
-            first = read_first(fh)
+            attr  = self._read_one(fh, first, base_url)
+
+            temp_fh = self.temp_file()
+            blob = Blob(temp_fh, attr)
+
+            # blobs
+            while True:
+                first = read_first(fh)
+
+                if first == END_ITEM: 
+                    break
+                elif first == LEN_SEP:
+                    size, first = _read_until(fh, LEN_SEP, parse=int)
+
+                    buf = fh.read(size)
+                    temp_fh.write(buf)
+
             if first != END_ITEM:
                     raise StandardError('blob')
-            blobs[blob_id] = blob
+
+            temp_fh.seek(0)
             return blob
 
         elif c not in ('', ):
             raise StandardError('decoding err', c)
         raise EOFError()
 
-    def _read_blobs(self, fh, blobs):
-        byte_count = collections.defaultdict(int)
-        while blobs:
-            first = read_first(fh)
-            if first == CHUNK:
-                blob_id, first = _read_until(fh, (LEN_SEP,END_ITEM), parse=int)
-                if first == END_ITEM: # 0 length block
-                    blobs.pop(blob_id).seek(0)
-                else:
-                    size, first = _read_until(fh, LEN_SEP, parse=int)
-                    blob = blobs[blob_id]
-                    buf = fh.read(size)
-                    blob.write(buf)
-                    byte_count[blob_id] += len(buf)
-                    first = read_first(fh)
+class Extension(object):
+    pass
 
-                if first != END_ITEM:
-                    raise StandardError('blob')
-                    
-            else:
-                raise StandardError('chunk')
+_encoder = Encoder(extension=Extension)
 
+dump = _encoder.dump
+dump_iter = _encoder.dump_iter
+dump_buf = _encoder.dump_buf
+parse = _encoder.parse
+read = _encoder.read
